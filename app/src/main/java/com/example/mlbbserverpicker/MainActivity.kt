@@ -20,15 +20,19 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Иерархический список стран с проверенными IP-узлами
+    // Полный список серверов и расширенных диапазонов подсетей Moonton
     private val countries = listOf(
         CountryRegion(
             id = "ukraine",
             countryName = "Украина",
             flagEmoji = "🇺🇦",
             servers = listOf(
-                ServerNode("ua_1", "Сервер Киев #1", listOf("185.180.222.1", "185.180.222.2"), listOf("185.180.222.0/24")),
-                ServerNode("ua_2", "Сервер Харьков #2", listOf("185.180.223.1", "185.180.223.2"), listOf("185.180.223.0/24"))
+                ServerNode(
+                    "ua_1", 
+                    "Сервер Киев / Харьков", 
+                    listOf("185.180.222.1", "185.180.223.1"), 
+                    listOf("185.180.220.0/22", "185.180.224.0/22", "185.180.228.0/22")
+                )
             )
         ),
         CountryRegion(
@@ -38,9 +42,9 @@ class MainActivity : AppCompatActivity() {
             servers = listOf(
                 ServerNode(
                     "sk_1", 
-                    "Сервер Братислава #1", 
-                    listOf("161.117.225.1", "161.117.224.1", "47.254.1.1", "185.230.223.1"), 
-                    listOf("161.117.225.0/24", "161.117.224.0/24", "47.254.0.0/16", "185.230.223.0/24")
+                    "Сервер Братислава", 
+                    listOf("161.117.225.1", "185.230.223.1"), 
+                    listOf("161.117.224.0/23", "185.230.222.0/23")
                 )
             )
         ),
@@ -51,9 +55,9 @@ class MainActivity : AppCompatActivity() {
             servers = listOf(
                 ServerNode(
                     "it_1", 
-                    "Сервер Милан #1", 
-                    listOf("161.117.59.1", "161.117.58.1", "47.241.1.1", "8.209.1.1"), 
-                    listOf("161.117.59.0/24", "161.117.58.0/24", "47.241.0.0/16")
+                    "Сервер Милан", 
+                    listOf("161.117.59.1", "161.117.58.1"), 
+                    listOf("161.117.58.0/23", "47.241.0.0/16")
                 )
             )
         ),
@@ -64,8 +68,8 @@ class MainActivity : AppCompatActivity() {
             servers = listOf(
                 ServerNode(
                     "sea_1", 
-                    "Сервер Сингапур #1", 
-                    listOf("47.74.0.1", "47.74.1.1", "47.74.2.1"), 
+                    "Сервер Сингапур", 
+                    listOf("47.74.0.1", "47.74.1.1"), 
                     listOf("47.74.0.0/16")
                 )
             )
@@ -77,9 +81,9 @@ class MainActivity : AppCompatActivity() {
             servers = listOf(
                 ServerNode(
                     "na_1", 
-                    "Сервер США #1", 
-                    listOf("47.89.0.1", "198.11.175.1", "47.252.0.1"), 
-                    listOf("47.89.0.0/16", "198.11.175.0/24", "47.252.0.0/16")
+                    "Сервер США", 
+                    listOf("47.89.0.1", "198.11.175.1"), 
+                    listOf("47.89.0.0/16", "198.11.175.0/24")
                 )
             )
         )
@@ -225,7 +229,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pingSingleIp(ip: String): Long {
-        // 1. Попытка через системный ICMP Ping
+        // 1. Попытка через ICMP Ping
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
@@ -242,20 +246,22 @@ class MainActivity : AppCompatActivity() {
             // Переход к TCP
         }
 
-        // 2. Умная проверка через TCP-сокеты (с учетом ConnectException)
+        // 2. Точная проверка через TCP-сокет
         val portsToTry = listOf(30130, 443, 80)
         for (port in portsToTry) {
             val startTime = System.currentTimeMillis()
             try {
                 val socket = Socket()
-                socket.connect(InetSocketAddress(ip, port), 1500)
+                socket.connect(InetSocketAddress(ip, port), 1000)
                 socket.close()
-                return System.currentTimeMillis() - startTime
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed < 800) return elapsed
             } catch (e: java.net.ConnectException) {
-                // Если сервер ответил отказом (RST), значит узел АКТИВЕН и ответил на запрос!
-                return System.currentTimeMillis() - startTime
+                val elapsed = System.currentTimeMillis() - startTime
+                // Если отказ пришел быстрее 800 мс — узел отвечает
+                if (elapsed < 800) return elapsed
             } catch (e: Exception) {
-                // Таймаут — пробуем следующий порт
+                // Игнорируем таймауты
             }
         }
         return -1L
