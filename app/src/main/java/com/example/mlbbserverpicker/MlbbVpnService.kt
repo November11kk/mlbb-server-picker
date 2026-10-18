@@ -27,17 +27,15 @@ class MlbbVpnService : VpnService() {
     }
 
     private fun startVpn(blockedSubnets: List<String>) {
-        stopVpnSilently() // Безопасный сброс предыдущей сессии
+        stopVpnSilently()
 
         try {
             val builder = Builder()
                 .setSession("MLBB Server Picker")
                 .setMtu(1500)
+                .addAddress("10.0.0.2", 32)
+                .addDnsServer("1.1.1.1") // Принудительный DNS для блокировки обходных запросов MLBB
 
-            // Локальный адрес виртуального туннеля
-            builder.addAddress("10.0.0.2", 32)
-
-            // Направляем подсети для блокировки во внутренний тупик
             var validRoutesCount = 0
             for (subnet in blockedSubnets) {
                 try {
@@ -55,18 +53,12 @@ class MlbbVpnService : VpnService() {
 
             if (validRoutesCount == 0) return
 
-            // Создаем VPN-интерфейс
             vpnInterface = builder.establish()
-
-            val pfd = vpnInterface
-            // Защита от NullPointerException (ошибка fdObj == null)
-            if (pfd == null) {
-                return
-            }
+            val pfd = vpnInterface ?: return
 
             isRunning = true
 
-            // Фоновый поток для поглощения трафика заблокированных регионов
+            // Фоновый поток для поглощения трафика заблокированных серверов
             workerThread = thread(start = true) {
                 try {
                     val inputStream = FileInputStream(pfd.fileDescriptor)
@@ -78,7 +70,7 @@ class MlbbVpnService : VpnService() {
                         }
                     }
                 } catch (e: Exception) {
-                    // Поток завершает работу при остановке службы
+                    // Остановка потока при закрытии VPN
                 }
             }
 
