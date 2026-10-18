@@ -20,7 +20,7 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Обновлённый список стран с проверенными IP-узлами
+    // Иерархический список стран с проверенными IP-узлами
     private val countries = listOf(
         CountryRegion(
             id = "ukraine",
@@ -39,7 +39,7 @@ class MainActivity : AppCompatActivity() {
                 ServerNode(
                     "sk_1", 
                     "Сервер Братислава #1", 
-                    listOf("161.117.225.11", "47.254.0.1", "185.230.223.1", "161.117.224.1"), 
+                    listOf("161.117.225.1", "161.117.224.1", "47.254.1.1", "185.230.223.1"), 
                     listOf("161.117.225.0/24", "161.117.224.0/24", "47.254.0.0/16", "185.230.223.0/24")
                 )
             )
@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
                 ServerNode(
                     "it_1", 
                     "Сервер Милан #1", 
-                    listOf("161.117.59.11", "47.241.0.1", "8.209.1.1", "161.117.58.1"), 
+                    listOf("161.117.59.1", "161.117.58.1", "47.241.1.1", "8.209.1.1"), 
                     listOf("161.117.59.0/24", "161.117.58.0/24", "47.241.0.0/16")
                 )
             )
@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
             servers = listOf(
                 ServerNode(
                     "na_1", 
-                    "Сервер США #1 (Восток/Запад)", 
+                    "Сервер США #1", 
                     listOf("47.89.0.1", "198.11.175.1", "47.252.0.1"), 
                     listOf("47.89.0.0/16", "198.11.175.0/24", "47.252.0.0/16")
                 )
@@ -106,9 +106,6 @@ class MainActivity : AppCompatActivity() {
         checkAllPings()
     }
 
-    /**
-     * Динамическое построение списка стран и серверов
-     */
     private fun renderCountryList() {
         llCountriesContainer.removeAllViews()
 
@@ -187,35 +184,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Параллельное измерение пинга с ПООЧЕРЕДНЫМ (живым) обновлением UI
-     */
     private fun checkAllPings() {
         if (isPinging) return
         isPinging = true
         tvStatus.text = "Измерение пинга..."
 
-        // Сбрасываем пинг в 0 (статус "Замер...") перед началом проверки
         countries.flatMap { it.servers }.forEach { it.pingMs = 0 }
         renderCountryList()
 
         GlobalScope.launch(Dispatchers.IO) {
             val allServers = countries.flatMap { it.servers }
 
-            // Запускаем асинхронную проверку для каждого сервера
             val tasks = allServers.map { server ->
                 async {
                     val resultPing = pingServerNode(server.ips)
                     server.pingMs = resultPing
 
-                    // МГНОВЕННОЕ обновление UI при завершении проверки данного сервера
                     withContext(Dispatchers.Main) {
                         renderCountryList()
                     }
                 }
             }
 
-            // Дожидаемся завершения всех задач
             tasks.awaitAll()
 
             isPinging = false
@@ -226,9 +216,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Последовательная проверка списка IP-адресов сервера
-     */
     private fun pingServerNode(ips: List<String>): Long {
         for (ip in ips) {
             val ping = pingSingleIp(ip)
@@ -237,11 +224,8 @@ class MainActivity : AppCompatActivity() {
         return -1L
     }
 
-    /**
-     * Измерение задержки отклика для одного IP
-     */
     private fun pingSingleIp(ip: String): Long {
-        // 1. Попытка через ICMP Ping
+        // 1. Попытка через системный ICMP Ping
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
@@ -258,25 +242,25 @@ class MainActivity : AppCompatActivity() {
             // Переход к TCP
         }
 
-        // 2. Резерв через TCP-сокеты (порты 30130, 443, 80)
+        // 2. Умная проверка через TCP-сокеты (с учетом ConnectException)
         val portsToTry = listOf(30130, 443, 80)
         for (port in portsToTry) {
+            val startTime = System.currentTimeMillis()
             try {
-                val startTime = System.currentTimeMillis()
                 val socket = Socket()
                 socket.connect(InetSocketAddress(ip, port), 1500)
                 socket.close()
                 return System.currentTimeMillis() - startTime
+            } catch (e: java.net.ConnectException) {
+                // Если сервер ответил отказом (RST), значит узел АКТИВЕН и ответил на запрос!
+                return System.currentTimeMillis() - startTime
             } catch (e: Exception) {
-                // Попытка следующего порта
+                // Таймаут — пробуем следующий порт
             }
         }
         return -1L
     }
 
-    /**
-     * Подготовка подсетей для блокировки и запуск VPN
-     */
     private fun activateVpnForSubnets(allowedSubnets: List<String>) {
         val allSubnets = countries.flatMap { c -> c.servers.flatMap { s -> s.subnets } }
         val subnetsToBlock = ArrayList(allSubnets.filter { !allowedSubnets.contains(it) })
@@ -302,9 +286,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Сброс блокировок
-     */
     private fun stopServerLock() {
         val intent = Intent(this, MlbbVpnService::class.java).apply {
             action = "ACTION_STOP"
