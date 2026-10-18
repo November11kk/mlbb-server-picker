@@ -20,15 +20,15 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Иерархический список стран и серверов
+    // Иерархический список стран с несколькими проверочными IP для каждого сервера
     private val countries = listOf(
         CountryRegion(
             id = "ukraine",
             countryName = "Украина",
             flagEmoji = "🇺🇦",
             servers = listOf(
-                ServerNode("ua_1", "Сервер Киев #1", "185.180.222.1", listOf("185.180.222.0/24")),
-                ServerNode("ua_2", "Сервер Харьков #2", "185.180.223.1", listOf("185.180.223.0/24"))
+                ServerNode("ua_1", "Сервер Киев #1", listOf("185.180.222.1", "185.180.222.2"), listOf("185.180.222.0/24")),
+                ServerNode("ua_2", "Сервер Харьков #2", listOf("185.180.223.1", "185.180.223.2"), listOf("185.180.223.0/24"))
             )
         ),
         CountryRegion(
@@ -36,7 +36,12 @@ class MainActivity : AppCompatActivity() {
             countryName = "Словакия",
             flagEmoji = "🇸🇰",
             servers = listOf(
-                ServerNode("sk_1", "Сервер Братислава #1", "161.117.225.1", listOf("161.117.225.0/24"))
+                ServerNode(
+                    "sk_1", 
+                    "Сервер Братислава #1", 
+                    listOf("161.117.225.1", "161.117.224.1", "8.209.0.1", "185.230.223.1"), 
+                    listOf("161.117.225.0/24", "161.117.224.0/24", "8.209.0.0/16", "185.230.223.0/24")
+                )
             )
         ),
         CountryRegion(
@@ -44,7 +49,12 @@ class MainActivity : AppCompatActivity() {
             countryName = "Италия",
             flagEmoji = "🇮🇹",
             servers = listOf(
-                ServerNode("it_1", "Сервер Милан #1", "161.117.59.1", listOf("161.117.59.0/24"))
+                ServerNode(
+                    "it_1", 
+                    "Сервер Милан #1", 
+                    listOf("161.117.59.1", "161.117.58.1", "47.241.0.1", "8.209.1.1"), 
+                    listOf("161.117.59.0/24", "161.117.58.0/24", "47.241.0.0/16")
+                )
             )
         ),
         CountryRegion(
@@ -52,7 +62,12 @@ class MainActivity : AppCompatActivity() {
             countryName = "Азия (SEA)",
             flagEmoji = "🌏",
             servers = listOf(
-                ServerNode("sea_1", "Сервер Сингапур #1", "47.74.0.1", listOf("47.74.0.0/16"))
+                ServerNode(
+                    "sea_1", 
+                    "Сервер Сингапур #1", 
+                    listOf("47.74.0.1", "47.74.1.1", "47.74.2.1"), 
+                    listOf("47.74.0.0/16")
+                )
             )
         ),
         CountryRegion(
@@ -60,7 +75,12 @@ class MainActivity : AppCompatActivity() {
             countryName = "Северная Америка",
             flagEmoji = "🇺🇸",
             servers = listOf(
-                ServerNode("na_1", "Сервер США #1", "47.89.0.1", listOf("47.89.0.0/16"))
+                ServerNode(
+                    "na_1", 
+                    "Сервер США #1", 
+                    listOf("47.89.0.1", "47.89.1.1", "149.28.0.1", "104.238.168.1"), 
+                    listOf("47.89.0.0/16", "149.28.0.0/16")
+                )
             )
         )
     )
@@ -87,7 +107,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Построение пользовательского интерфейса со списком стран
+     * Построение списка стран в интерфейсе
      */
     private fun renderCountryList() {
         llCountriesContainer.removeAllViews()
@@ -168,7 +188,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Параллельное измерение пинга для всех серверов
+     * Параллельное измерение пинга
      */
     private fun checkAllPings() {
         if (isPinging) return
@@ -179,14 +199,12 @@ class MainActivity : AppCompatActivity() {
         GlobalScope.launch(Dispatchers.IO) {
             val allServers = countries.flatMap { it.servers }
 
-            // Запускаем асинхронные задачи параллельно
             val tasks = allServers.map { server ->
                 async {
-                    server.pingMs = pingSingleIp(server.ip)
+                    server.pingMs = pingServerNode(server.ips)
                 }
             }
 
-            // Ожидаем завершения всех параллельных потоков
             tasks.awaitAll()
 
             isPinging = false
@@ -198,7 +216,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Замер задержки отклика с таймаутом в 2000 мс (2 секунды)
+     * Проверка списка IP-адресов сервера до первого успешного отклика
+     */
+    private fun pingServerNode(ips: List<String>): Long {
+        for (ip in ips) {
+            val ping = pingSingleIp(ip)
+            if (ping >= 0) return ping
+        }
+        return -1L
+    }
+
+    /**
+     * Комплексный замер задержки до единичного IP
      */
     private fun pingSingleIp(ip: String): Long {
         // 1. Попытка через системный ICMP Ping
@@ -218,7 +247,7 @@ class MainActivity : AppCompatActivity() {
             // Переход к TCP
         }
 
-        // 2. Резервная проверка через TCP-сокет (таймаут 2000 мс)
+        // 2. Попытка через TCP-сокеты (порты 443, 80, 30130)
         val portsToTry = listOf(443, 80, 30130)
         for (port in portsToTry) {
             try {
@@ -228,14 +257,14 @@ class MainActivity : AppCompatActivity() {
                 socket.close()
                 return System.currentTimeMillis() - startTime
             } catch (e: Exception) {
-                // Попытка следующего порта
+                // Игнорируем и пробуем следующий порт
             }
         }
         return -1L
     }
 
     /**
-     * Активация VPN-блокировки
+     * Активация локального VPN
      */
     private fun activateVpnForSubnets(allowedSubnets: List<String>) {
         val allSubnets = countries.flatMap { c -> c.servers.flatMap { s -> s.subnets } }
