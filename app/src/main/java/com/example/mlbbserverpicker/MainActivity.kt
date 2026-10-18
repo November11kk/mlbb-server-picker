@@ -64,25 +64,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Комбинированное измерение пинга:
-     * 1. Сначала через системную утилиту ICMP Ping
-     * 2. Резерв через TCP-сокет
+     * Безопасное измерение пинга:
+     * 1. Безопасное чтение через ICMP lineSequence()
+     * 2. Резервный замер через TCP-сокет
      */
     private fun measurePing(ip: String): Long {
         // Способ 1: Системный ICMP Ping
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                if (line!!.contains("time=")) {
+            
+            // Читаем поток строк без изменяемых переменных (var)
+            for (line in reader.lineSequence()) {
+                if (line.contains("time=")) {
                     val timeStr = line.substringAfter("time=").substringBefore(" ms").trim()
-                    return timeStr.toFloat().toLong()
+                    val pingValue = timeStr.toFloat().toLong()
+                    process.destroy()
+                    return pingValue
                 }
             }
             process.waitFor()
         } catch (e: Exception) {
-            // Если утилита недоступна, переходим к резервному методу
+            // Если утилита недоступна, переходим к резерву
         }
 
         // Способ 2: Резервное подключение через TCP-сокет
