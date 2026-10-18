@@ -2,11 +2,12 @@ package com.example.mlbbserverpicker
 
 /**
  * Модель отдельного сервера
+ * @property ips Список проверочных IP-адресов узла (основной и резервные)
  */
 data class ServerNode(
     val id: String,
     val name: String,
-    val ip: String,
+    val ips: List<String>,
     val subnets: List<String>,
     var pingMs: Long = -1
 )
