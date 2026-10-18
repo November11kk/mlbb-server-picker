@@ -1,9 +1,12 @@
 package com.example.mlbbserverpicker
 
 import android.content.Intent
+import android.graphics.Color
 import android.net.VpnService
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.Dispatchers
@@ -15,96 +18,167 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Расширенный список серверов с несколькими проверочными IP на каждый регион
-    private val servers = listOf(
-        MlbbServer(
-            "ukraine", 
-            "Украина / В. Европа", 
-            listOf("185.180.222.1", "185.180.222.2", "185.180.223.1"), 
-            listOf("185.180.222.0/24", "185.180.223.0/24")
+    // Иерархический список: Страны -> Отдельные сервера
+    private val countries = listOf(
+        CountryRegion(
+            id = "ukraine",
+            countryName = "Украина",
+            flagEmoji = "🇺🇦",
+            servers = listOf(
+                ServerNode("ua_1", "Сервер Киев #1", "185.180.222.1", listOf("185.180.222.0/24")),
+                ServerNode("ua_2", "Сервер Харьков #2", "185.180.223.1", listOf("185.180.223.0/24"))
+            )
         ),
-        MlbbServer(
-            "eu_central", 
-            "Украина - Словакия - Италия", 
-            listOf("161.117.59.1", "161.117.58.1", "161.117.60.1"), 
-            listOf("161.117.59.0/24", "161.117.58.0/24", "161.117.60.0/24")
+        CountryRegion(
+            id = "slovakia",
+            countryName = "Словакия",
+            flagEmoji = "🇸🇰",
+            servers = listOf(
+                ServerNode("sk_1", "Сервер Братислава #1", "161.117.225.1", listOf("161.117.225.0/24"))
+            )
         ),
-        MlbbServer(
-            "sea", 
-            "Азия (SEA)", 
-            listOf("47.74.0.1", "47.74.1.1", "47.74.2.1"), 
-            listOf("47.74.0.0/16")
+        CountryRegion(
+            id = "italy",
+            countryName = "Италия",
+            flagEmoji = "🇮🇹",
+            servers = listOf(
+                ServerNode("it_1", "Сервер Милан #1", "161.117.59.1", listOf("161.117.59.0/24"))
+            )
         ),
-        MlbbServer(
-            "na", 
-            "Северная Америка (NA)", 
-            listOf("47.89.0.1", "47.89.1.1", "47.89.2.1"), 
-            listOf("47.89.0.0/16")
+        CountryRegion(
+            id = "sea",
+            countryName = "Азия (SEA)",
+            flagEmoji = "🌏",
+            servers = listOf(
+                ServerNode("sea_1", "Сервер Сингапур #1", "47.74.0.1", listOf("47.74.0.0/16"))
+            )
+        ),
+        CountryRegion(
+            id = "na",
+            countryName = "Северная Америка",
+            flagEmoji = "🇺🇸",
+            servers = listOf(
+                ServerNode("na_1", "Сервер США #1", "47.89.0.1", listOf("47.89.0.0/16"))
+            )
         )
     )
 
-    private var selectedServerId: String? = null
+    private var selectedSubnetsToKeep = ArrayList<String>()
     private val VPN_REQUEST_CODE = 1001
 
     private lateinit var tvStatus: TextView
+    private lateinit var llCountriesContainer: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         tvStatus = findViewById(R.id.tvStatus)
+        llCountriesContainer = findViewById(R.id.llCountriesContainer)
 
-        // Обработчики нажатий кнопок
         findViewById<Button>(R.id.btnCheckPing).setOnClickListener { checkAllPings() }
-        findViewById<Button>(R.id.btnUkraine).setOnClickListener { selectServer("ukraine") }
-        findViewById<Button>(R.id.btnEuCentral).setOnClickListener { selectServer("eu_central") }
         findViewById<Button>(R.id.btnReset).setOnClickListener { stopServerLock() }
 
-        // Замер пинга при старте
+        renderCountryList()
         checkAllPings()
     }
 
     /**
-     * Запуск проверки задержки для каждого сервера
+     * Динамическое построение списка стран и их серверов
+     */
+    private fun renderCountryList() {
+        llCountriesContainer.removeAllViews()
+
+        for (country in countries) {
+            val countryHeader = Button(this).apply {
+                text = "${country.flagEmoji} ${country.countryName} ${if (country.isExpanded) "▲" else "▼"}"
+                setBackgroundColor(Color.parseColor("#252525"))
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setPadding(24, 24, 24, 24)
+            }
+
+            val serversLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = if (country.isExpanded) View.VISIBLE else View.GONE
+                setPadding(16, 8, 16, 24)
+            }
+
+            countryHeader.setOnClickListener {
+                country.isExpanded = !country.isExpanded
+                serversLayout.visibility = if (country.isExpanded) View.VISIBLE else View.GONE
+                countryHeader.text = "${country.flagEmoji} ${country.countryName} ${if (country.isExpanded) "▲" else "▼"}"
+            }
+
+            for (server in country.servers) {
+                val serverRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(12, 12, 12, 12)
+                }
+
+                val tvServerInfo = TextView(this).apply {
+                    val pingStr = if (server.pingMs >= 0) "${server.pingMs} мс" else "Замер..."
+                    text = "• ${server.name}\n  Пинг: $pingStr"
+                    setTextColor(Color.LTGRAY)
+                    textSize = 14f
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                val btnSelectServer = Button(this).apply {
+                    text = "Выбрать"
+                    setBackgroundColor(Color.parseColor("#1E88E5"))
+                    setTextColor(Color.WHITE)
+                    setOnClickListener {
+                        activateVpnForSubnets(server.subnets)
+                    }
+                }
+
+                serverRow.addView(tvServerInfo)
+                serverRow.addView(btnSelectServer)
+                serversLayout.addView(serverRow)
+            }
+
+            val btnSelectAllCountry = Button(this).apply {
+                text = "Фиксировать всю страну: ${country.countryName}"
+                setBackgroundColor(Color.parseColor("#388E3C"))
+                setTextColor(Color.WHITE)
+                setOnClickListener {
+                    val countrySubnets = country.servers.flatMap { it.subnets }
+                    activateVpnForSubnets(countrySubnets)
+                }
+            }
+            serversLayout.addView(btnSelectAllCountry)
+
+            llCountriesContainer.addView(countryHeader)
+            llCountriesContainer.addView(serversLayout)
+        }
+    }
+
+    /**
+     * Поочередное измерение пинга для всех узлов
      */
     private fun checkAllPings() {
         tvStatus.text = "Измерение пинга..."
         GlobalScope.launch(Dispatchers.IO) {
-            val results = StringBuilder()
-            for (server in servers) {
-                val ping = measureServerPing(server.testIps)
-                server.pingMs = ping
-                val pingText = if (ping >= 0) "$ping мс" else "Недоступен"
-                results.append("${server.name}: $pingText\n")
+            for (country in countries) {
+                for (server in country.servers) {
+                    server.pingMs = pingSingleIp(server.ip)
+                }
             }
             withContext(Dispatchers.Main) {
-                tvStatus.text = results.toString()
+                renderCountryList()
+                tvStatus.text = "Пинг обновлён!"
             }
         }
     }
 
     /**
-     * Проверка списка IP-адресов региона до первого успешного ответа
-     */
-    private fun measureServerPing(ips: List<String>): Long {
-        for (ip in ips) {
-            val ping = pingSingleIp(ip)
-            if (ping >= 0) return ping
-        }
-        return -1L
-    }
-
-    /**
-     * Двухуровневая проверка конкретного IP:
-     * 1. ICMP ping
-     * 2. Резервные TCP сокеты (порты 443 и 80)
+     * Замер задержки до IP-адреса
      */
     private fun pingSingleIp(ip: String): Long {
-        // Способ 1: ICMP Ping через системную консоль
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
-            
             for (line in reader.lineSequence()) {
                 if (line.contains("time=")) {
                     val timeStr = line.substringAfter("time=").substringBefore(" ms").trim()
@@ -115,11 +189,10 @@ class MainActivity : AppCompatActivity() {
             }
             process.waitFor()
         } catch (e: Exception) {
-            // Переход к TCP резерву при ошибке утилиты
+            // Резервный вызов
         }
 
-        // Способ 2: Резервная проверка через TCP-сокет на портах 443 и 80
-        val portsToTry = listOf(443, 80)
+        val portsToTry = listOf(443, 80, 30130)
         for (port in portsToTry) {
             try {
                 val startTime = System.currentTimeMillis()
@@ -128,18 +201,21 @@ class MainActivity : AppCompatActivity() {
                 socket.close()
                 return System.currentTimeMillis() - startTime
             } catch (e: Exception) {
-                // Пробуем следующий порт
+                // Игнорируем и пробуем следующий порт
             }
         }
-
         return -1L
     }
 
     /**
-     * Включение блокировки невыбранных регионов
+     * Формирование списка заблокированных подсетей
      */
-    private fun selectServer(serverId: String) {
-        selectedServerId = serverId
+    private fun activateVpnForSubnets(allowedSubnets: List<String>) {
+        val allSubnets = countries.flatMap { c -> c.servers.flatMap { s -> s.subnets } }
+        val subnetsToBlock = ArrayList(allSubnets.filter { !allowedSubnets.contains(it) })
+
+        selectedSubnetsToKeep = subnetsToBlock
+
         val intent = VpnService.prepare(this)
         if (intent != null) {
             startActivityForResult(intent, VPN_REQUEST_CODE)
@@ -151,26 +227,16 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
-            val targetServer = servers.find { it.id == selectedServerId } ?: return
-            
-            val blockedSubnets = ArrayList<String>()
-            for (server in servers) {
-                if (server.id != selectedServerId) {
-                    blockedSubnets.addAll(server.subnets)
-                }
-            }
-
             val serviceIntent = Intent(this, MlbbVpnService::class.java).apply {
-                putStringArrayListExtra("BLOCKED_SUBNETS", blockedSubnets)
+                putStringArrayListExtra("BLOCKED_SUBNETS", selectedSubnetsToKeep)
             }
             startService(serviceIntent)
-            
-            tvStatus.text = "Зафиксирован сервер: ${targetServer.name}\nОстальные регионы заблокированы!"
+            tvStatus.text = "VPN активен! Выбранный регион зафиксирован."
         }
     }
 
     /**
-     * Сброс всех фильтров
+     * Отключение VPN
      */
     private fun stopServerLock() {
         val intent = Intent(this, MlbbVpnService::class.java).apply {
