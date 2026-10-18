@@ -11,6 +11,8 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
@@ -18,7 +20,7 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Иерархический список: Страны -> Отдельные сервера
+    // Иерархический список стран и серверов
     private val countries = listOf(
         CountryRegion(
             id = "ukraine",
@@ -68,6 +70,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var llCountriesContainer: LinearLayout
+    private var isPinging = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,7 +87,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Динамическое построение списка стран и их серверов
+     * Построение пользовательского интерфейса со списком стран
      */
     private fun renderCountryList() {
         llCountriesContainer.removeAllViews()
@@ -117,9 +120,19 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val tvServerInfo = TextView(this).apply {
-                    val pingStr = if (server.pingMs >= 0) "${server.pingMs} мс" else "Замер..."
-                    text = "• ${server.name}\n  Пинг: $pingStr"
-                    setTextColor(Color.LTGRAY)
+                    val pingText = when {
+                        isPinging -> "Замер..."
+                        server.pingMs >= 0 -> "${server.pingMs} мс"
+                        else -> "Недоступен"
+                    }
+                    text = "• ${server.name}\n  Пинг: $pingText"
+                    setTextColor(
+                        when {
+                            isPinging -> Color.YELLOW
+                            server.pingMs >= 0 -> Color.LTGRAY
+                            else -> Color.parseColor("#FF6B6B")
+                        }
+                    )
                     textSize = 14f
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
@@ -155,16 +168,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Поочередное измерение пинга для всех узлов
+     * Параллельное измерение пинга для всех серверов
      */
     private fun checkAllPings() {
+        if (isPinging) return
+        isPinging = true
         tvStatus.text = "Измерение пинга..."
+        renderCountryList()
+
         GlobalScope.launch(Dispatchers.IO) {
-            for (country in countries) {
-                for (server in country.servers) {
+            val allServers = countries.flatMap { it.servers }
+
+            // Запускаем асинхронные задачи параллельно
+            val tasks = allServers.map { server ->
+                async {
                     server.pingMs = pingSingleIp(server.ip)
                 }
             }
+
+            // Ожидаем завершения всех параллельных потоков
+            tasks.awaitAll()
+
+            isPinging = false
             withContext(Dispatchers.Main) {
                 renderCountryList()
                 tvStatus.text = "Пинг обновлён!"
@@ -173,9 +198,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Замер задержки до IP-адреса
+     * Замер задержки отклика с таймаутом в 2000 мс (2 секунды)
      */
     private fun pingSingleIp(ip: String): Long {
+        // 1. Попытка через системный ICMP Ping
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
@@ -189,26 +215,27 @@ class MainActivity : AppCompatActivity() {
             }
             process.waitFor()
         } catch (e: Exception) {
-            // Резервный вызов
+            // Переход к TCP
         }
 
+        // 2. Резервная проверка через TCP-сокет (таймаут 2000 мс)
         val portsToTry = listOf(443, 80, 30130)
         for (port in portsToTry) {
             try {
                 val startTime = System.currentTimeMillis()
                 val socket = Socket()
-                socket.connect(InetSocketAddress(ip, port), 1200)
+                socket.connect(InetSocketAddress(ip, port), 2000)
                 socket.close()
                 return System.currentTimeMillis() - startTime
             } catch (e: Exception) {
-                // Игнорируем и пробуем следующий порт
+                // Попытка следующего порта
             }
         }
         return -1L
     }
 
     /**
-     * Формирование списка заблокированных подсетей
+     * Активация VPN-блокировки
      */
     private fun activateVpnForSubnets(allowedSubnets: List<String>) {
         val allSubnets = countries.flatMap { c -> c.servers.flatMap { s -> s.subnets } }
