@@ -15,12 +15,32 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Список серверов: проверочные IP и блокируемые подсети
+    // Расширенный список серверов с несколькими проверочными IP на каждый регион
     private val servers = listOf(
-        MlbbServer("ukraine", "Украина / В. Европа", "185.180.222.1", listOf("185.180.222.0/24")),
-        MlbbServer("eu_central", "Украина - Словакия - Италия", "161.117.59.1", listOf("161.117.59.0/24")),
-        MlbbServer("sea", "Азия (SEA)", "47.74.0.1", listOf("47.74.0.0/16")),
-        MlbbServer("na", "Северная Америка (NA)", "47.89.0.1", listOf("47.89.0.0/16"))
+        MlbbServer(
+            "ukraine", 
+            "Украина / В. Европа", 
+            listOf("185.180.222.1", "185.180.222.2", "185.180.223.1"), 
+            listOf("185.180.222.0/24", "185.180.223.0/24")
+        ),
+        MlbbServer(
+            "eu_central", 
+            "Украина - Словакия - Италия", 
+            listOf("161.117.59.1", "161.117.58.1", "161.117.60.1"), 
+            listOf("161.117.59.0/24", "161.117.58.0/24", "161.117.60.0/24")
+        ),
+        MlbbServer(
+            "sea", 
+            "Азия (SEA)", 
+            listOf("47.74.0.1", "47.74.1.1", "47.74.2.1"), 
+            listOf("47.74.0.0/16")
+        ),
+        MlbbServer(
+            "na", 
+            "Северная Америка (NA)", 
+            listOf("47.89.0.1", "47.89.1.1", "47.89.2.1"), 
+            listOf("47.89.0.0/16")
+        )
     )
 
     private var selectedServerId: String? = null
@@ -34,25 +54,25 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
 
-        // Привязка обработчиков нажатий на кнопки
+        // Обработчики нажатий кнопок
         findViewById<Button>(R.id.btnCheckPing).setOnClickListener { checkAllPings() }
         findViewById<Button>(R.id.btnUkraine).setOnClickListener { selectServer("ukraine") }
         findViewById<Button>(R.id.btnEuCentral).setOnClickListener { selectServer("eu_central") }
         findViewById<Button>(R.id.btnReset).setOnClickListener { stopServerLock() }
 
-        // Запуск проверки пинга при старте приложения
+        // Замер пинга при старте
         checkAllPings()
     }
 
     /**
-     * Фоновое измерение пинга для всех серверов
+     * Запуск проверки задержки для каждого сервера
      */
     private fun checkAllPings() {
         tvStatus.text = "Измерение пинга..."
         GlobalScope.launch(Dispatchers.IO) {
             val results = StringBuilder()
             for (server in servers) {
-                val ping = measurePing(server.testIp)
+                val ping = measureServerPing(server.testIps)
                 server.pingMs = ping
                 val pingText = if (ping >= 0) "$ping мс" else "Недоступен"
                 results.append("${server.name}: $pingText\n")
@@ -64,17 +84,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Безопасное измерение пинга:
-     * 1. Безопасное чтение через ICMP lineSequence()
-     * 2. Резервный замер через TCP-сокет
+     * Проверка списка IP-адресов региона до первого успешного ответа
      */
-    private fun measurePing(ip: String): Long {
-        // Способ 1: Системный ICMP Ping
+    private fun measureServerPing(ips: List<String>): Long {
+        for (ip in ips) {
+            val ping = pingSingleIp(ip)
+            if (ping >= 0) return ping
+        }
+        return -1L
+    }
+
+    /**
+     * Двухуровневая проверка конкретного IP:
+     * 1. ICMP ping
+     * 2. Резервные TCP сокеты (порты 443 и 80)
+     */
+    private fun pingSingleIp(ip: String): Long {
+        // Способ 1: ICMP Ping через системную консоль
         try {
             val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
             val reader = process.inputStream.bufferedReader()
             
-            // Читаем поток строк без изменяемых переменных (var)
             for (line in reader.lineSequence()) {
                 if (line.contains("time=")) {
                     val timeStr = line.substringAfter("time=").substringBefore(" ms").trim()
@@ -85,23 +115,28 @@ class MainActivity : AppCompatActivity() {
             }
             process.waitFor()
         } catch (e: Exception) {
-            // Если утилита недоступна, переходим к резерву
+            // Переход к TCP резерву при ошибке утилиты
         }
 
-        // Способ 2: Резервное подключение через TCP-сокет
-        return try {
-            val startTime = System.currentTimeMillis()
-            val socket = Socket()
-            socket.connect(InetSocketAddress(ip, 80), 1500)
-            socket.close()
-            System.currentTimeMillis() - startTime
-        } catch (e: Exception) {
-            -1L
+        // Способ 2: Резервная проверка через TCP-сокет на портах 443 и 80
+        val portsToTry = listOf(443, 80)
+        for (port in portsToTry) {
+            try {
+                val startTime = System.currentTimeMillis()
+                val socket = Socket()
+                socket.connect(InetSocketAddress(ip, port), 1200)
+                socket.close()
+                return System.currentTimeMillis() - startTime
+            } catch (e: Exception) {
+                // Пробуем следующий порт
+            }
         }
+
+        return -1L
     }
 
     /**
-     * Запуск локальной VPN-блокировки для выбранного сервера
+     * Включение блокировки невыбранных регионов
      */
     private fun selectServer(serverId: String) {
         selectedServerId = serverId
@@ -118,7 +153,6 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
             val targetServer = servers.find { it.id == selectedServerId } ?: return
             
-            // Собираем подсети всех НЕВЫБРАННЫХ серверов для блокировки
             val blockedSubnets = ArrayList<String>()
             for (server in servers) {
                 if (server.id != selectedServerId) {
@@ -136,7 +170,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Остановка службы VPN и сброс блокировок
+     * Сброс всех фильтров
      */
     private fun stopServerLock() {
         val intent = Intent(this, MlbbVpnService::class.java).apply {
