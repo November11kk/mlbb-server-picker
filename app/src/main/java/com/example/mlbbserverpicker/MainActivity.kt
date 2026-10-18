@@ -20,7 +20,6 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Расширенные диапазоны подсетей и новые проверочные IP
     private val countries = listOf(
         CountryRegion(
             id = "ukraine",
@@ -30,12 +29,8 @@ class MainActivity : AppCompatActivity() {
                 ServerNode(
                     "ua_1", 
                     "Сервер Украина / В. Европа", 
-                    listOf("185.180.222.1", "185.180.223.1", "185.230.220.1"), 
-                    listOf(
-                        "185.180.0.0/16", 
-                        "185.230.0.0/16", 
-                        "47.241.0.0/16"
-                    )
+                    listOf("185.180.222.1", "185.180.223.1"), 
+                    listOf("185.180.0.0/16", "185.230.0.0/16", "47.241.0.0/16")
                 )
             )
         ),
@@ -47,7 +42,7 @@ class MainActivity : AppCompatActivity() {
                 ServerNode(
                     "sk_1", 
                     "Сервер Братислава", 
-                    listOf("161.117.225.1", "161.117.224.1", "47.254.1.1"), 
+                    listOf("161.117.225.11", "47.254.1.1", "161.117.224.1"), 
                     listOf("161.117.224.0/23", "47.254.0.0/16")
                 )
             )
@@ -60,7 +55,7 @@ class MainActivity : AppCompatActivity() {
                 ServerNode(
                     "it_1", 
                     "Сервер Милан", 
-                    listOf("8.209.1.1", "161.117.59.1", "161.117.58.1"), 
+                    listOf("8.209.1.1", "161.117.59.11", "161.117.58.1"), 
                     listOf("8.209.0.0/16", "161.117.58.0/23")
                 )
             )
@@ -233,16 +228,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pingSingleIp(ip: String): Long {
-        // 1. Попытка через ICMP Ping
         try {
-            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
+            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 1 $ip")
             val reader = process.inputStream.bufferedReader()
             for (line in reader.lineSequence()) {
                 if (line.contains("time=")) {
                     val timeStr = line.substringAfter("time=").substringBefore(" ms").trim()
                     val pingValue = timeStr.toFloat().toLong()
                     process.destroy()
-                    return pingValue
+                    if (pingValue in 1..999) return pingValue
                 }
             }
             process.waitFor()
@@ -250,18 +244,20 @@ class MainActivity : AppCompatActivity() {
             // Переход к TCP
         }
 
-        // 2. Проверка через TCP-сокеты
         val portsToTry = listOf(443, 80, 30130)
         for (port in portsToTry) {
             val startTime = System.currentTimeMillis()
             try {
                 val socket = Socket()
-                socket.connect(InetSocketAddress(ip, port), 1000)
+                socket.connect(InetSocketAddress(ip, port), 600)
                 socket.close()
                 val elapsed = System.currentTimeMillis() - startTime
-                if (elapsed < 800) return elapsed
+                if (elapsed < 600) return elapsed
+            } catch (e: java.net.ConnectException) {
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed < 600) return elapsed
             } catch (e: Exception) {
-                // Игнорируем ошибки для недоступных портов
+                // Игнорируем таймауты
             }
         }
         return -1L
