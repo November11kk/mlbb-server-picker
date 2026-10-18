@@ -10,6 +10,7 @@ class MlbbVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var isRunning = false
+    private var workerThread: Thread? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "ACTION_STOP") {
@@ -17,59 +18,95 @@ class MlbbVpnService : VpnService() {
             return START_NOT_STICKY
         }
 
-        val blockedSubnets = intent?.getStringArrayListExtra("BLOCKED_SUBNETS") ?: arrayListOf()
-        startVpn(blockedSubnets)
+        val blockedSubnets = intent?.getStringArrayListExtra("BLOCKED_SUBNETS")
+        if (!blockedSubnets.isNullOrEmpty()) {
+            startVpn(blockedSubnets)
+        }
 
         return START_STICKY
     }
 
     private fun startVpn(blockedSubnets: List<String>) {
-        stopVpn()
+        stopVpnSilently() // Безопасный сброс предыдущей сессии
 
         try {
             val builder = Builder()
-                .setSession("MLBB Server Blocker")
-                .addAddress("10.0.0.2", 32)
+                .setSession("MLBB Server Picker")
+                .setMtu(1500)
 
+            // Локальный адрес виртуального туннеля
+            builder.addAddress("10.0.0.2", 32)
+
+            // Направляем подсети для блокировки во внутренний тупик
+            var validRoutesCount = 0
             for (subnet in blockedSubnets) {
-                val parts = subnet.split("/")
-                if (parts.size == 2) {
-                    builder.addRoute(parts[0], parts[1].toInt())
-                }
-            }
-
-            vpnInterface = builder.establish()
-            isRunning = true
-
-            thread {
-                val input = FileInputStream(vpnInterface?.fileDescriptor)
-                val buffer = ByteArray(32768)
                 try {
-                    while (isRunning) {
-                        input.read(buffer) // "Сбрасываем" пакеты заблокированных серверов
+                    val parts = subnet.split("/")
+                    if (parts.size == 2) {
+                        val ip = parts[0]
+                        val prefix = parts[1].toInt()
+                        builder.addRoute(ip, prefix)
+                        validRoutesCount++
                     }
                 } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
 
+            if (validRoutesCount == 0) return
+
+            // Создаем VPN-интерфейс
+            vpnInterface = builder.establish()
+
+            val pfd = vpnInterface
+            // Защита от NullPointerException (ошибка fdObj == null)
+            if (pfd == null) {
+                return
+            }
+
+            isRunning = true
+
+            // Фоновый поток для поглощения трафика заблокированных регионов
+            workerThread = thread(start = true) {
+                try {
+                    val inputStream = FileInputStream(pfd.fileDescriptor)
+                    val buffer = ByteArray(32768)
+                    while (isRunning) {
+                        val length = inputStream.read(buffer)
+                        if (length <= 0) {
+                            Thread.sleep(100)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Поток завершает работу при остановке службы
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            stopVpnSilently()
+        }
+    }
+
+    private fun stopVpnSilently() {
+        isRunning = false
+        try {
+            workerThread?.interrupt()
+            workerThread = null
+            vpnInterface?.close()
+            vpnInterface = null
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     private fun stopVpn() {
-        isRunning = false
-        try {
-            vpnInterface?.close()
-            vpnInterface = null
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        stopVpnSilently()
         stopSelf()
     }
 
     override fun onDestroy() {
-        stopVpn()
+        stopVpnSilently()
         super.onDestroy()
     }
 }
