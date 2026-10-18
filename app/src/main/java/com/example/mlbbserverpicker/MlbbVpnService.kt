@@ -33,12 +33,17 @@ class MlbbVpnService : VpnService() {
             val builder = Builder()
                 .setSession("MLBB Server Picker")
                 .setMtu(1500)
-                // Локальные адреса виртуального туннеля (IPv4 и IPv6)
                 .addAddress("10.0.0.2", 32)
                 .addAddress("fd00::1", 128)
-                // Публичные DNS для перехвата обходных запросов
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
+
+            // Блокировка IPv6 для исключения обхода фильтра через IPv6
+            try {
+                builder.addRoute("2000::", 3)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
             var validRoutesCount = 0
             for (subnet in blockedSubnets) {
@@ -57,14 +62,12 @@ class MlbbVpnService : VpnService() {
 
             if (validRoutesCount == 0) return
 
-            // Включаем блокирующий режим туннеля
             builder.setBlocking(true)
             vpnInterface = builder.establish()
             val pfd = vpnInterface ?: return
 
             isRunning = true
 
-            // Фоновый поток для сброса пакетов заблокированных регионов
             workerThread = thread(start = true) {
                 try {
                     val inputStream = FileInputStream(pfd.fileDescriptor)
@@ -76,7 +79,7 @@ class MlbbVpnService : VpnService() {
                         }
                     }
                 } catch (e: Exception) {
-                    // Поток закрывается при остановке сервиса
+                    // Окончание работы потока
                 }
             }
 
