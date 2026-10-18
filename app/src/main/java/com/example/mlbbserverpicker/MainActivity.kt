@@ -15,7 +15,7 @@ import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
-    // Сервера: Украина и маршрут Украина - Словакия - Италия
+    // Список серверов: проверочные IP и блокируемые подсети
     private val servers = listOf(
         MlbbServer("ukraine", "Украина / В. Европа", "185.180.222.1", listOf("185.180.222.0/24")),
         MlbbServer("eu_central", "Украина - Словакия - Италия", "161.117.59.1", listOf("161.117.59.0/24")),
@@ -34,14 +34,19 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
 
+        // Привязка обработчиков нажатий на кнопки
         findViewById<Button>(R.id.btnCheckPing).setOnClickListener { checkAllPings() }
         findViewById<Button>(R.id.btnUkraine).setOnClickListener { selectServer("ukraine") }
         findViewById<Button>(R.id.btnEuCentral).setOnClickListener { selectServer("eu_central") }
         findViewById<Button>(R.id.btnReset).setOnClickListener { stopServerLock() }
 
+        // Запуск проверки пинга при старте приложения
         checkAllPings()
     }
 
+    /**
+     * Фоновое измерение пинга для всех серверов
+     */
     private fun checkAllPings() {
         tvStatus.text = "Измерение пинга..."
         GlobalScope.launch(Dispatchers.IO) {
@@ -58,11 +63,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun measurePing(ip: String, port: Int = 443, timeoutMs: Int = 1500): Long {
+    /**
+     * Комбинированное измерение пинга:
+     * 1. Сначала через системную утилиту ICMP Ping
+     * 2. Резерв через TCP-сокет
+     */
+    private fun measurePing(ip: String): Long {
+        // Способ 1: Системный ICMP Ping
+        try {
+            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -w 2 $ip")
+            val reader = process.inputStream.bufferedReader()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                if (line!!.contains("time=")) {
+                    val timeStr = line.substringAfter("time=").substringBefore(" ms").trim()
+                    return timeStr.toFloat().toLong()
+                }
+            }
+            process.waitFor()
+        } catch (e: Exception) {
+            // Если утилита недоступна, переходим к резервному методу
+        }
+
+        // Способ 2: Резервное подключение через TCP-сокет
         return try {
             val startTime = System.currentTimeMillis()
             val socket = Socket()
-            socket.connect(InetSocketAddress(ip, port), timeoutMs)
+            socket.connect(InetSocketAddress(ip, 80), 1500)
             socket.close()
             System.currentTimeMillis() - startTime
         } catch (e: Exception) {
@@ -70,6 +97,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Запуск локальной VPN-блокировки для выбранного сервера
+     */
     private fun selectServer(serverId: String) {
         selectedServerId = serverId
         val intent = VpnService.prepare(this)
@@ -85,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
             val targetServer = servers.find { it.id == selectedServerId } ?: return
             
+            // Собираем подсети всех НЕВЫБРАННЫХ серверов для блокировки
             val blockedSubnets = ArrayList<String>()
             for (server in servers) {
                 if (server.id != selectedServerId) {
@@ -97,15 +128,18 @@ class MainActivity : AppCompatActivity() {
             }
             startService(serviceIntent)
             
-            tvStatus.text = " Зафиксирован сервер: ${targetServer.name}\nОстальные заблокированы!"
+            tvStatus.text = "Зафиксирован сервер: ${targetServer.name}\nОстальные регионы заблокированы!"
         }
     }
 
+    /**
+     * Остановка службы VPN и сброс блокировок
+     */
     private fun stopServerLock() {
         val intent = Intent(this, MlbbVpnService::class.java).apply {
             action = "ACTION_STOP"
         }
         startService(intent)
-        tvStatus.text = " Блокировки сброшены."
+        tvStatus.text = "Блокировки сброшены."
     }
 }
